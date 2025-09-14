@@ -17,6 +17,9 @@
 #define KYBER_CIPHERTEXTBYTES (KYBER_POLYVECBYTES + KYBER_POLYBYTES)
 #define KYBER_SSBYTES 32
 
+// Enable verbose debugging
+#define VERBOSE_DEBUG 1
+
 // Function prototypes
 void secure_randombytes(uint8_t *x, size_t xlen);
 void kyber_keypair(uint8_t *pk, uint8_t *sk);
@@ -51,6 +54,23 @@ void poly_frombytes(int16_t *r, const uint8_t *a);
 void poly_tobytes(uint8_t *r, const int16_t *a);
 void print_poly(const char *label, const int16_t *p);
 void print_polyvec(const char *label, const int16_t p[KYBER_K][KYBER_N]);
+void print_bytes(const char *label, const uint8_t *data, size_t len);
+void hash_and_print(const char *label, const void *data, size_t len);
+
+// Debugging macros
+#if VERBOSE_DEBUG
+#define DEBUG_PRINT(fmt, ...) printf("[DEBUG] %s:%d: " fmt, __FILE__, __LINE__, ##__VA_ARGS__)
+#define DEBUG_PRINT_POLY(label, poly) print_poly(label, poly)
+#define DEBUG_PRINT_POLYVEC(label, polyvec) print_polyvec(label, polyvec)
+#define DEBUG_PRINT_BYTES(label, data, len) print_bytes(label, data, len)
+#define DEBUG_HASH_AND_PRINT(label, data, len) hash_and_print(label, data, len)
+#else
+#define DEBUG_PRINT(fmt, ...)
+#define DEBUG_PRINT_POLY(label, poly)
+#define DEBUG_PRINT_POLYVEC(label, polyvec)
+#define DEBUG_PRINT_BYTES(label, data, len)
+#define DEBUG_HASH_AND_PRINT(label, data, len)
+#endif
 
 // Cryptographically secure random number generator
 void secure_randombytes(uint8_t *x, size_t xlen) {
@@ -65,6 +85,7 @@ void secure_randombytes(uint8_t *x, size_t xlen) {
         exit(1);
     }
     fclose(f);
+    DEBUG_PRINT_BYTES("Generated random bytes", x, xlen > 16 ? 16 : xlen);
 }
 
 // Simplified SHA3 implementation (Keccak) for demonstration
@@ -89,6 +110,12 @@ void sha3_512(uint8_t *output, const uint8_t *input, size_t inlen) {
 }
 
 void shake128(uint8_t *output, size_t outlen, const uint8_t *input, size_t inlen) {
+    DEBUG_PRINT("SHAKE128 input (%zu bytes): ", inlen);
+    for (size_t i = 0; i < (inlen > 16 ? 16 : inlen); i++) {
+        printf("%02x", input[i]);
+    }
+    printf("\n");
+    
     // Simplified implementation
     for (size_t i = 0; i < outlen; i++) {
         output[i] = 0;
@@ -96,9 +123,21 @@ void shake128(uint8_t *output, size_t outlen, const uint8_t *input, size_t inlen
             output[i] ^= input[j] + i + j;
         }
     }
+    
+    DEBUG_PRINT("SHAKE128 output (%zu bytes): ", outlen);
+    for (size_t i = 0; i < (outlen > 16 ? 16 : outlen); i++) {
+        printf("%02x", output[i]);
+    }
+    printf("\n");
 }
 
 void shake256(uint8_t *output, size_t outlen, const uint8_t *input, size_t inlen) {
+    DEBUG_PRINT("SHAKE256 input (%zu bytes): ", inlen);
+    for (size_t i = 0; i < (inlen > 16 ? 16 : inlen); i++) {
+        printf("%02x", input[i]);
+    }
+    printf("\n");
+    
     // Simplified implementation
     for (size_t i = 0; i < outlen; i++) {
         output[i] = 0;
@@ -106,6 +145,12 @@ void shake256(uint8_t *output, size_t outlen, const uint8_t *input, size_t inlen
             output[i] ^= input[j] + i + j + 0x100;
         }
     }
+    
+    DEBUG_PRINT("SHAKE256 output (%zu bytes): ", outlen);
+    for (size_t i = 0; i < (outlen > 16 ? 16 : outlen); i++) {
+        printf("%02x", output[i]);
+    }
+    printf("\n");
 }
 
 // Zeta array for NTT
@@ -151,16 +196,24 @@ static int16_t csubq(int16_t a) {
 
 // Convert bytes to polynomial
 void poly_frombytes(int16_t *r, const uint8_t *a) {
+    DEBUG_PRINT("Converting bytes to polynomial\n");
     for (size_t i = 0; i < KYBER_N / 2; i++) {
         r[2*i]   = a[3*i]       | ((a[3*i+1] & 0x0f) << 8);
         r[2*i+1] = (a[3*i+1] >> 4) | (a[3*i+2] << 4);
         r[2*i]   = csubq(r[2*i]);
         r[2*i+1] = csubq(r[2*i+1]);
+        
+        if (i < 5) { // Only print first few for debugging
+            DEBUG_PRINT("  i=%zu: bytes=%02x%02x%02x -> coeffs=%d,%d\n", 
+                       i, a[3*i], a[3*i+1], a[3*i+2], r[2*i], r[2*i+1]);
+        }
     }
+    DEBUG_PRINT_POLY("Resulting polynomial", r);
 }
 
 // Convert polynomial to bytes
 void poly_tobytes(uint8_t *r, const int16_t *a) {
+    DEBUG_PRINT("Converting polynomial to bytes\n");
     int16_t t[2];
     
     for (size_t i = 0; i < KYBER_N / 2; i++) {
@@ -170,16 +223,24 @@ void poly_tobytes(uint8_t *r, const int16_t *a) {
         r[3*i]     = t[0] & 0xff;
         r[3*i+1]   = (t[0] >> 8) | (t[1] & 0x0f) << 4;
         r[3*i+2]   = t[1] >> 4;
+        
+        if (i < 5) { // Only print first few for debugging
+            DEBUG_PRINT("  i=%zu: coeffs=%d,%d -> bytes=%02x%02x%02x\n", 
+                       i, a[2*i], a[2*i+1], r[3*i], r[3*i+1], r[3*i+2]);
+        }
     }
 }
 
 // Generate noise polynomial using centered binomial distribution
 void poly_getnoise_eta1(int16_t *r, const uint8_t *seed, uint8_t nonce) {
+    DEBUG_PRINT("Generating eta1 noise with nonce=%d\n", nonce);
     uint8_t buf[KYBER_ETA1 * KYBER_N / 4];
     uint8_t extseed[32 + 1];
     
     memcpy(extseed, seed, 32);
     extseed[32] = nonce;
+    
+    DEBUG_PRINT_BYTES("Noise seed", extseed, 33);
     
     // Use SHAKE-128 to generate noise
     shake128(buf, sizeof(buf), extseed, 33);
@@ -192,15 +253,23 @@ void poly_getnoise_eta1(int16_t *r, const uint8_t *seed, uint8_t nonce) {
         }
         r[i] = (d & 0xff) - (d >> 8);
         r[i] = csubq(r[i]);
+        
+        if (i < 10) { // Only print first few for debugging
+            DEBUG_PRINT("  i=%zu: t=%04x, d=%04x, r[i]=%d\n", i, t, d, r[i]);
+        }
     }
+    DEBUG_PRINT_POLY("Generated noise polynomial", r);
 }
 
 void poly_getnoise_eta2(int16_t *r, const uint8_t *seed, uint8_t nonce) {
+    DEBUG_PRINT("Generating eta2 noise with nonce=%d\n", nonce);
     uint8_t buf[KYBER_ETA2 * KYBER_N / 4];
     uint8_t extseed[32 + 1];
     
     memcpy(extseed, seed, 32);
     extseed[32] = nonce;
+    
+    DEBUG_PRINT_BYTES("Noise seed", extseed, 33);
     
     // Use SHAKE-128 to generate noise
     shake128(buf, sizeof(buf), extseed, 33);
@@ -213,11 +282,17 @@ void poly_getnoise_eta2(int16_t *r, const uint8_t *seed, uint8_t nonce) {
         }
         r[i] = (d & 0xff) - (d >> 8);
         r[i] = csubq(r[i]);
+        
+        if (i < 10) { // Only print first few for debugging
+            DEBUG_PRINT("  i=%zu: t=%04x, d=%04x, r[i]=%d\n", i, t, d, r[i]);
+        }
     }
+    DEBUG_PRINT_POLY("Generated noise polynomial", r);
 }
 
 // Forward NTT transform
 void poly_ntt(int16_t *r) {
+    DEBUG_PRINT("Applying NTT transform\n");
     int len, start, j, k;
     int16_t t, zeta;
 
@@ -232,10 +307,12 @@ void poly_ntt(int16_t *r) {
             }
         }
     }
+    DEBUG_PRINT_POLY("After NTT", r);
 }
 
 // Inverse NTT transform
 void poly_invntt(int16_t *r) {
+    DEBUG_PRINT("Applying inverse NTT transform\n");
     int len, start, j, k;
     int16_t t, zeta;
 
@@ -257,10 +334,12 @@ void poly_invntt(int16_t *r) {
     for (size_t i = 0; i < KYBER_N; i++) {
         r[i] = montgomery_reduce(f * r[i]);
     }
+    DEBUG_PRINT_POLY("After inverse NTT", r);
 }
 
 // Polynomial multiplication
 void poly_basemul(int16_t *r, const int16_t *a, const int16_t *b) {
+    DEBUG_PRINT("Performing polynomial multiplication\n");
     for (size_t i = 0; i < KYBER_N / 4; i++) {
         int16_t t0, t1, t2, t3;
         
@@ -273,20 +352,34 @@ void poly_basemul(int16_t *r, const int16_t *a, const int16_t *b) {
         r[4*i+1] = barrett_reduce(t2 + t3);
         r[4*i+2] = barrett_reduce(t0 - t1);
         r[4*i+3] = barrett_reduce(t2 - t3);
+        
+        if (i < 5) { // Only print first few for debugging
+            DEBUG_PRINT("  i=%zu: a=[%d,%d,%d,%d], b=[%d,%d,%d,%d], r=[%d,%d,%d,%d]\n",
+                       i, a[4*i], a[4*i+1], a[4*i+2], a[4*i+3],
+                       b[4*i], b[4*i+1], b[4*i+2], b[4*i+3],
+                       r[4*i], r[4*i+1], r[4*i+2], r[4*i+3]);
+        }
     }
+    DEBUG_PRINT_POLY("Multiplication result", r);
 }
 
 // Convert message to polynomial
 void poly_frommsg(int16_t *r, const uint8_t *msg) {
+    DEBUG_PRINT("Converting message to polynomial\n");
+    DEBUG_PRINT_BYTES("Input message", msg, 32);
+    
     for (size_t i = 0; i < KYBER_N / 8; i++) {
         for (size_t j = 0; j < 8; j++) {
             r[8*i+j] = ((msg[i] >> j) & 1) * ((KYBER_Q + 1) / 2);
         }
+        DEBUG_PRINT("  byte[%zu]=%02x -> coefficients %zu-%zu\n", i, msg[i], i*8, i*8+7);
     }
+    DEBUG_PRINT_POLY("Message polynomial", r);
 }
 
 // Convert polynomial to message
 void poly_tomsg(uint8_t *msg, const int16_t *r) {
+    DEBUG_PRINT("Converting polynomial to message\n");
     uint16_t t;
     
     for (size_t i = 0; i < KYBER_N / 8; i++) {
@@ -297,33 +390,49 @@ void poly_tomsg(uint8_t *msg, const int16_t *r) {
             t = (t * 2) / KYBER_Q;
             msg[i] |= (t & 1) << j;
         }
+        DEBUG_PRINT("  coefficients %zu-%zu -> byte[%zu]=%02x\n", i*8, i*8+7, i, msg[i]);
     }
+    DEBUG_PRINT_BYTES("Output message", msg, 32);
 }
 
 // Polynomial addition
 void poly_add(int16_t *r, const int16_t *a, const int16_t *b) {
+    DEBUG_PRINT("Adding polynomials\n");
     for (size_t i = 0; i < KYBER_N; i++) {
         r[i] = barrett_reduce(a[i] + b[i]);
+        if (i < 10) { // Only print first few for debugging
+            DEBUG_PRINT("  i=%zu: %d + %d = %d\n", i, a[i], b[i], r[i]);
+        }
     }
+    DEBUG_PRINT_POLY("Addition result", r);
 }
 
 // Polynomial subtraction
 void poly_sub(int16_t *r, const int16_t *a, const int16_t *b) {
+    DEBUG_PRINT("Subtracting polynomials\n");
     for (size_t i = 0; i < KYBER_N; i++) {
         r[i] = barrett_reduce(a[i] - b[i]);
+        if (i < 10) { // Only print first few for debugging
+            DEBUG_PRINT("  i=%zu: %d - %d = %d\n", i, a[i], b[i], r[i]);
+        }
     }
+    DEBUG_PRINT_POLY("Subtraction result", r);
 }
 
 // Vector NTT transform
 void polyvec_ntt(int16_t r[KYBER_K][KYBER_N]) {
+    DEBUG_PRINT("Applying NTT to polynomial vector\n");
     for (size_t i = 0; i < KYBER_K; i++) {
+        DEBUG_PRINT("  Processing polynomial %zu\n", i);
         poly_ntt(r[i]);
     }
 }
 
 // Vector inverse NTT transform
 void polyvec_invntt(int16_t r[KYBER_K][KYBER_N]) {
+    DEBUG_PRINT("Applying inverse NTT to polynomial vector\n");
     for (size_t i = 0; i < KYBER_K; i++) {
+        DEBUG_PRINT("  Processing polynomial %zu\n", i);
         poly_invntt(r[i]);
     }
 }
@@ -331,7 +440,9 @@ void polyvec_invntt(int16_t r[KYBER_K][KYBER_N]) {
 // Vector multiplication
 void polyvec_basemul(int16_t r[KYBER_K][KYBER_N], const int16_t a[KYBER_K][KYBER_N], 
                      const int16_t b[KYBER_K][KYBER_N]) {
+    DEBUG_PRINT("Multiplying polynomial vectors\n");
     for (size_t i = 0; i < KYBER_K; i++) {
+        DEBUG_PRINT("  Processing polynomial %zu\n", i);
         poly_basemul(r[i], a[i], b[i]);
     }
 }
@@ -339,7 +450,9 @@ void polyvec_basemul(int16_t r[KYBER_K][KYBER_N], const int16_t a[KYBER_K][KYBER
 // Vector addition
 void polyvec_add(int16_t r[KYBER_K][KYBER_N], const int16_t a[KYBER_K][KYBER_N], 
                  const int16_t b[KYBER_K][KYBER_N]) {
+    DEBUG_PRINT("Adding polynomial vectors\n");
     for (size_t i = 0; i < KYBER_K; i++) {
+        DEBUG_PRINT("  Processing polynomial %zu\n", i);
         poly_add(r[i], a[i], b[i]);
     }
 }
@@ -347,17 +460,21 @@ void polyvec_add(int16_t r[KYBER_K][KYBER_N], const int16_t a[KYBER_K][KYBER_N],
 // Vector subtraction
 void polyvec_sub(int16_t r[KYBER_K][KYBER_N], const int16_t a[KYBER_K][KYBER_N], 
                  const int16_t b[KYBER_K][KYBER_N]) {
+    DEBUG_PRINT("Subtracting polynomial vectors\n");
     for (size_t i = 0; i < KYBER_K; i++) {
+        DEBUG_PRINT("  Processing polynomial %zu\n", i);
         poly_sub(r[i], a[i], b[i]);
     }
 }
 
 // Compress polynomial vector
 void polyvec_compress(uint8_t *r, const int16_t a[KYBER_K][KYBER_N]) {
+    DEBUG_PRINT("Compressing polynomial vector\n");
     size_t i, j, k;
     uint16_t t[4];
     
     for (i = 0; i < KYBER_K; i++) {
+        DEBUG_PRINT("  Compressing polynomial %zu\n", i);
         for (j = 0; j < KYBER_N / 4; j++) {
             for (k = 0; k < 4; k++) {
                 t[k] = a[i][4*j+k];
@@ -371,15 +488,26 @@ void polyvec_compress(uint8_t *r, const int16_t a[KYBER_K][KYBER_N]) {
             r[3] = (t[2] >> 4) | (t[3] << 6);
             r[4] = t[3] >> 2;
             r += 5;
+            
+            if (j < 5) { // Only print first few for debugging
+                DEBUG_PRINT("    j=%zu: coeffs=[%d,%d,%d,%d] -> bytes=%02x%02x%02x%02x%02x\n",
+                           j, a[i][4*j], a[i][4*j+1], a[i][4*j+2], a[i][4*j+3],
+                           r[-5], r[-4], r[-3], r[-2], r[-1]);
+            }
         }
     }
+    DEBUG_PRINT_BYTES("Compressed polynomial vector", r - KYBER_POLYVECBYTES, KYBER_POLYVECBYTES);
 }
 
 // Decompress polynomial vector
 void polyvec_decompress(int16_t r[KYBER_K][KYBER_N], const uint8_t *a) {
+    DEBUG_PRINT("Decompressing polynomial vector\n");
+    DEBUG_PRINT_BYTES("Compressed data", a, 20); // Print first 20 bytes
+    
     size_t i, j;
     
     for (i = 0; i < KYBER_K; i++) {
+        DEBUG_PRINT("  Decompressing polynomial %zu\n", i);
         for (j = 0; j < KYBER_N / 4; j++) {
             r[i][4*j+0] = ((a[0] >> 0) | (a[1] << 8)) & 0x3ff;
             r[i][4*j+1] = ((a[1] >> 2) | (a[2] << 6)) & 0x3ff;
@@ -390,12 +518,19 @@ void polyvec_decompress(int16_t r[KYBER_K][KYBER_N], const uint8_t *a) {
             for (size_t k = 0; k < 4; k++) {
                 r[i][4*j+k] = (r[i][4*j+k] * KYBER_Q + 512) >> 10;
             }
+            
+            if (j < 5) { // Only print first few for debugging
+                DEBUG_PRINT("    j=%zu: bytes -> coeffs=[%d,%d,%d,%d]\n",
+                           j, r[i][4*j], r[i][4*j+1], r[i][4*j+2], r[i][4*j+3]);
+            }
         }
     }
+    DEBUG_PRINT_POLYVEC("Decompressed polynomial vector", r);
 }
 
 // Compress polynomial
 void poly_compress(uint8_t *r, const int16_t *a) {
+    DEBUG_PRINT("Compressing polynomial\n");
     uint16_t t[8];
     size_t i, j;
     
@@ -410,11 +545,21 @@ void poly_compress(uint8_t *r, const int16_t *a) {
         r[1] = (t[2] >> 2) | (t[3] << 1) | (t[4] << 4) | (t[5] << 7);
         r[2] = (t[5] >> 1) | (t[6] << 2) | (t[7] << 5);
         r += 3;
+        
+        if (i < 40) { // Only print first few for debugging
+            DEBUG_PRINT("  i=%zu: coeffs=[%d,%d,%d,%d,%d,%d,%d,%d] -> bytes=%02x%02x%02x\n",
+                       i, a[i], a[i+1], a[i+2], a[i+3], a[i+4], a[i+5], a[i+6], a[i+7],
+                       r[-3], r[-2], r[-1]);
+        }
     }
+    DEBUG_PRINT_BYTES("Compressed polynomial", r - KYBER_POLYBYTES, KYBER_POLYBYTES);
 }
 
 // Decompress polynomial
 void poly_decompress(int16_t *r, const uint8_t *a) {
+    DEBUG_PRINT("Decompressing polynomial\n");
+    DEBUG_PRINT_BYTES("Compressed data", a, 12); // Print first 12 bytes
+    
     size_t i;
     
     for (i = 0; i < KYBER_N; i += 8) {
@@ -431,12 +576,18 @@ void poly_decompress(int16_t *r, const uint8_t *a) {
         for (size_t j = 0; j < 8; j++) {
             r[i+j] = (r[i+j] * KYBER_Q + 4) >> 3;
         }
+        
+        if (i < 40) { // Only print first few for debugging
+            DEBUG_PRINT("  i=%zu: bytes -> coeffs=[%d,%d,%d,%d,%d,%d,%d,%d]\n",
+                       i, r[i], r[i+1], r[i+2], r[i+3], r[i+4], r[i+5], r[i+6], r[i+7]);
+        }
     }
+    DEBUG_PRINT_POLY("Decompressed polynomial", r);
 }
 
 // Debugging functions
 void print_poly(const char *label, const int16_t *p) {
-    printf("%s: [", label);
+    printf("[DEBUG] %s: [", label);
     for (int i = 0; i < 10; i++) {
         printf("%d, ", p[i]);
     }
@@ -444,7 +595,7 @@ void print_poly(const char *label, const int16_t *p) {
 }
 
 void print_polyvec(const char *label, const int16_t p[KYBER_K][KYBER_N]) {
-    printf("%s:\n", label);
+    printf("[DEBUG] %s:\n", label);
     for (int i = 0; i < KYBER_K; i++) {
         printf("  [%d]: [", i);
         for (int j = 0; j < 10; j++) {
@@ -454,8 +605,28 @@ void print_polyvec(const char *label, const int16_t p[KYBER_K][KYBER_N]) {
     }
 }
 
+void print_bytes(const char *label, const uint8_t *data, size_t len) {
+    printf("[DEBUG] %s (%zu bytes): ", label, len);
+    for (size_t i = 0; i < (len > 16 ? 16 : len); i++) {
+        printf("%02x", data[i]);
+    }
+    if (len > 16) printf("...");
+    printf("\n");
+}
+
+void hash_and_print(const char *label, const void *data, size_t len) {
+    uint8_t hash[32];
+    sha3_256(hash, data, len);
+    printf("[DEBUG] %s SHA3-256: ", label);
+    for (int i = 0; i < 32; i++) {
+        printf("%02x", hash[i]);
+    }
+    printf("\n");
+}
+
 // Key generation
 void kyber_keypair(uint8_t *pk, uint8_t *sk) {
+    DEBUG_PRINT("Starting key generation\n");
     uint8_t buf[64];
     uint8_t publicseed[32], noiseseed[32];
     int16_t a[KYBER_K][KYBER_K][KYBER_N];
@@ -468,6 +639,9 @@ void kyber_keypair(uint8_t *pk, uint8_t *sk) {
     // Expand public seed and noise seed using SHAKE-256
     shake256(publicseed, 32, buf, 32);
     shake256(noiseseed, 32, buf + 32, 32);
+    
+    DEBUG_PRINT_BYTES("Public seed", publicseed, 32);
+    DEBUG_PRINT_BYTES("Noise seed", noiseseed, 32);
     
     // Generate matrix A using SHAKE-128
     for (size_t i = 0; i < KYBER_K; i++) {
@@ -483,6 +657,9 @@ void kyber_keypair(uint8_t *pk, uint8_t *sk) {
             for (size_t k = 0; k < KYBER_N; k++) {
                 a[i][j][k] = (buf[k] | (buf[k + 128] << 8)) % KYBER_Q;
             }
+            
+            DEBUG_PRINT("Generated matrix A[%zu][%zu]\n", i, j);
+            DEBUG_PRINT_POLY("A[i][j]", a[i][j]);
         }
     }
     
@@ -490,11 +667,13 @@ void kyber_keypair(uint8_t *pk, uint8_t *sk) {
     for (size_t i = 0; i < KYBER_K; i++) {
         poly_getnoise_eta1(s[i], noiseseed, i);
     }
+    DEBUG_PRINT_POLYVEC("Secret vector s", s);
     
     // Generate error vector e
     for (size_t i = 0; i < KYBER_K; i++) {
         poly_getnoise_eta1(e[i], noiseseed, i + KYBER_K);
     }
+    DEBUG_PRINT_POLYVEC("Error vector e", e);
     
     // Compute t = A*s + e
     for (size_t i = 0; i < KYBER_K; i++) {
@@ -513,24 +692,32 @@ void kyber_keypair(uint8_t *pk, uint8_t *sk) {
             t[i][j] = csubq(t[i][j]);
         }
     }
+    DEBUG_PRINT_POLYVEC("Result t = A*s + e", t);
     
     // Pack public key
     polyvec_compress(pk, t);
     memcpy(pk + KYBER_POLYVECBYTES, publicseed, 32);
+    
+    DEBUG_PRINT_BYTES("Public key", pk, KYBER_PUBLICKEYBYTES);
     
     // Pack secret key
     polyvec_compress(sk, s);
     memcpy(sk + KYBER_POLYVECBYTES, pk, KYBER_PUBLICKEYBYTES);
     memcpy(sk + KYBER_POLYVECBYTES + KYBER_PUBLICKEYBYTES, noiseseed, 32);
     
+    DEBUG_PRINT_BYTES("Secret key", sk, KYBER_SECRETKEYBYTES > 64 ? 64 : KYBER_SECRETKEYBYTES);
+    
     // Clean up sensitive data
     memset(buf, 0, sizeof(buf));
     memset(s, 0, sizeof(s));
     memset(e, 0, sizeof(e));
+    
+    DEBUG_PRINT("Key generation completed\n");
 }
 
 // Encapsulation
 void kyber_encapsulate(uint8_t *ct, uint8_t *ss, const uint8_t *pk) {
+    DEBUG_PRINT("Starting encapsulation\n");
     uint8_t buf[32];
     uint8_t publicseed[32];
     int16_t sp[KYBER_K][KYBER_N], ep[KYBER_K][KYBER_N], epp[KYBER_N];
@@ -538,11 +725,16 @@ void kyber_encapsulate(uint8_t *ct, uint8_t *ss, const uint8_t *pk) {
     int16_t bp[KYBER_K][KYBER_N], v[KYBER_N], mp[KYBER_N];
     
     // Unpack public key
+    DEBUG_PRINT_BYTES("Input public key", pk, KYBER_PUBLICKEYBYTES);
     polyvec_decompress(pkpv, pk);
     memcpy(publicseed, pk + KYBER_POLYVECBYTES, 32);
     
+    DEBUG_PRINT_BYTES("Public seed from PK", publicseed, 32);
+    DEBUG_PRINT_POLYVEC("Decompressed public key", pkpv);
+    
     // Generate random message
     secure_randombytes(buf, 32);
+    DEBUG_PRINT_BYTES("Random message", buf, 32);
     
     // Generate matrix A^T using SHAKE-128
     for (size_t i = 0; i < KYBER_K; i++) {
@@ -558,6 +750,9 @@ void kyber_encapsulate(uint8_t *ct, uint8_t *ss, const uint8_t *pk) {
             for (size_t k = 0; k < KYBER_N; k++) {
                 at[i][j][k] = (buf[k] | (buf[k + 128] << 8)) % KYBER_Q;
             }
+            
+            DEBUG_PRINT("Generated matrix AT[%zu][%zu]\n", i, j);
+            DEBUG_PRINT_POLY("AT[i][j]", at[i][j]);
         }
     }
     
@@ -565,14 +760,17 @@ void kyber_encapsulate(uint8_t *ct, uint8_t *ss, const uint8_t *pk) {
     for (size_t i = 0; i < KYBER_K; i++) {
         poly_getnoise_eta1(sp[i], buf, i);
     }
+    DEBUG_PRINT_POLYVEC("Secret vector sp", sp);
     
     // Generate vector ep
     for (size_t i = 0; i < KYBER_K; i++) {
         poly_getnoise_eta2(ep[i], buf, i + KYBER_K);
     }
+    DEBUG_PRINT_POLYVEC("Error vector ep", ep);
     
     // Generate error polynomial epp
     poly_getnoise_eta2(epp, buf, 2 * KYBER_K);
+    DEBUG_PRINT_POLY("Error polynomial epp", epp);
     
     // Compute bp = A^T * sp + ep
     for (size_t i = 0; i < KYBER_K; i++) {
@@ -591,6 +789,7 @@ void kyber_encapsulate(uint8_t *ct, uint8_t *ss, const uint8_t *pk) {
             bp[i][j] = csubq(bp[i][j]);
         }
     }
+    DEBUG_PRINT_POLYVEC("Result bp = A^T * sp + ep", bp);
     
     // Compute v = pkpv^T * sp + epp + Encode(m)
     poly_frommsg(mp, buf);
@@ -608,38 +807,58 @@ void kyber_encapsulate(uint8_t *ct, uint8_t *ss, const uint8_t *pk) {
         }
         v[j] = csubq(v[j]);
     }
+    DEBUG_PRINT_POLY("Result v = pkpv^T * sp + epp + Encode(m)", v);
     
     // Pack ciphertext
     polyvec_compress(ct, bp);
     poly_compress(ct + KYBER_POLYVECBYTES, v);
     
+    DEBUG_PRINT_BYTES("Ciphertext", ct, KYBER_CIPHERTEXTBYTES);
+    
     // Derive shared secret using SHAKE-256
     uint8_t concat[32 + KYBER_CIPHERTEXTBYTES];
     memcpy(concat, buf, 32);
     memcpy(concat + 32, ct, KYBER_CIPHERTEXTBYTES);
+    
+    DEBUG_PRINT_BYTES("KDF input (message || ciphertext)", concat, 32 + KYBER_CIPHERTEXTBYTES);
+    
     shake256(ss, KYBER_SSBYTES, concat, 32 + KYBER_CIPHERTEXTBYTES);
+    
+    DEBUG_PRINT_BYTES("Shared secret", ss, KYBER_SSBYTES);
     
     // Clean up sensitive data
     memset(buf, 0, sizeof(buf));
     memset(sp, 0, sizeof(sp));
     memset(ep, 0, sizeof(ep));
     memset(epp, 0, sizeof(epp));
+    
+    DEBUG_PRINT("Encapsulation completed\n");
 }
 
 // Decapsulation
 void kyber_decapsulate(uint8_t *ss, const uint8_t *ct, const uint8_t *sk) {
+    DEBUG_PRINT("Starting decapsulation\n");
     uint8_t buf[32];
     uint8_t noiseseed[32];
     int16_t s[KYBER_K][KYBER_N], bp[KYBER_K][KYBER_N], v[KYBER_N], mp[KYBER_N];
     
     // Unpack secret key
+    DEBUG_PRINT_BYTES("Input secret key", sk, KYBER_SECRETKEYBYTES > 64 ? 64 : KYBER_SECRETKEYBYTES);
     polyvec_decompress(s, sk);
     const uint8_t *pk = sk + KYBER_POLYVECBYTES;
     memcpy(noiseseed, sk + KYBER_POLYVECBYTES + KYBER_PUBLICKEYBYTES, 32);
     
+    DEBUG_PRINT_BYTES("Noise seed from SK", noiseseed, 32);
+    DEBUG_PRINT_POLYVEC("Decompressed secret vector s", s);
+    DEBUG_PRINT_BYTES("Public key from SK", pk, KYBER_PUBLICKEYBYTES);
+    
     // Unpack ciphertext
+    DEBUG_PRINT_BYTES("Input ciphertext", ct, KYBER_CIPHERTEXTBYTES);
     polyvec_decompress(bp, ct);
     poly_decompress(v, ct + KYBER_POLYVECBYTES);
+    
+    DEBUG_PRINT_POLYVEC("Decompressed bp", bp);
+    DEBUG_PRINT_POLY("Decompressed v", v);
     
     // Compute m = v - s^T * bp
     for (size_t j = 0; j < KYBER_N; j++) {
@@ -656,14 +875,21 @@ void kyber_decapsulate(uint8_t *ss, const uint8_t *ct, const uint8_t *sk) {
         }
         mp[j] = (v[j] - t) % KYBER_Q;
         mp[j] = csubq(mp[j]);
+        
+        if (j < 10) { // Only print first few for debugging
+            DEBUG_PRINT("  j=%zu: v[%zu]=%d, t=%d, mp[%zu]=%d\n", j, j, v[j], t, j, mp[j]);
+        }
     }
+    DEBUG_PRINT_POLY("Result m = v - s^T * bp", mp);
     
     // Convert m to message
     poly_tomsg(buf, mp);
+    DEBUG_PRINT_BYTES("Recovered message", buf, 32);
     
     // Re-encrypt to verify ciphertext
     uint8_t ct2[KYBER_CIPHERTEXTBYTES];
     uint8_t ss2[KYBER_SSBYTES];
+    DEBUG_PRINT("Re-encrypting for verification\n");
     kyber_encapsulate(ct2, ss2, pk);
     
     // Compare with original ciphertext
@@ -672,8 +898,11 @@ void kyber_decapsulate(uint8_t *ss, const uint8_t *ct, const uint8_t *sk) {
         cmp |= ct[i] ^ ct2[i];
     }
     
+    DEBUG_PRINT("Ciphertext comparison result: %d (0 = match)\n", cmp);
+    
     // If ciphertexts don't match, use a random value
     if (cmp != 0) {
+        DEBUG_PRINT("Ciphertexts don't match, using random value\n");
         secure_randombytes(buf, 32);
     }
     
@@ -681,10 +910,17 @@ void kyber_decapsulate(uint8_t *ss, const uint8_t *ct, const uint8_t *sk) {
     uint8_t concat[32 + KYBER_CIPHERTEXTBYTES];
     memcpy(concat, buf, 32);
     memcpy(concat + 32, ct, KYBER_CIPHERTEXTBYTES);
+    
+    DEBUG_PRINT_BYTES("KDF input (message || ciphertext)", concat, 32 + KYBER_CIPHERTEXTBYTES);
+    
     shake256(ss, KYBER_SSBYTES, concat, 32 + KYBER_CIPHERTEXTBYTES);
+    
+    DEBUG_PRINT_BYTES("Shared secret", ss, KYBER_SSBYTES);
     
     // Clean up sensitive data
     memset(buf, 0, sizeof(buf));
+    
+    DEBUG_PRINT("Decapsulation completed\n");
 }
 
 // Example usage
@@ -735,12 +971,16 @@ int main() {
         
         // Print first few bytes of shared secrets for debugging
         printf("Shared secret 1: ");
-        for (int i = 0; i < 8; i++) printf("%02x", ss1[i]);
-        printf("...\n");
+        for (int i = 0; i < 16; i++) printf("%02x", ss1[i]);
+        printf("\n");
         
         printf("Shared secret 2: ");
-        for (int i = 0; i < 8; i++) printf("%02x", ss2[i]);
-        printf("...\n");
+        for (int i = 0; i < 16; i++) printf("%02x", ss2[i]);
+        printf("\n");
+        
+        // Print hashes for better comparison
+        hash_and_print("Shared secret 1", ss1, KYBER_SSBYTES);
+        hash_and_print("Shared secret 2", ss2, KYBER_SSBYTES);
     }
     
     // Clean up
